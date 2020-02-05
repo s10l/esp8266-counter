@@ -1,9 +1,12 @@
 #include <PubSubClient.h>
 #include <ESP8266WiFi.h>
+#include <arduino_secrets.h>
+#include <Arduino.h>
+#include <ArduinoOTA.h>
 
-const int gpio = D0;                     // the pin we read from
-const char mqtt_server[] = SECRET_HOST;  // dns (not mdns) or ip of mqtt host
-const int mqtt_port = 1883;              // port, default 1883
+const int gpio = D0;                    // the pin we read from
+const char mqtt_server[] = SECRET_HOST; // dns (not mdns) or ip of mqtt host
+const int mqtt_port = 1883;             // port, default 1883
 
 // Variables will change:
 int state = HIGH;    // the current reading from the input pin
@@ -27,6 +30,9 @@ unsigned long deadTime = 500;       // deadTime after we rise to high
 WiFiClient espClient;
 PubSubClient client(espClient);
 
+void reconnect();
+void enableOTA();
+
 void setup()
 {
   pinMode(gpio, INPUT);
@@ -36,6 +42,7 @@ void setup()
 
   // ssid and password were previously set by another sketch
   // attempt to connect using WPA2 encryption:
+  Serial.println("");
   Serial.println("Attempting to connect to WPA network...");
 
   while (WiFi.status() != WL_CONNECTED)
@@ -75,11 +82,10 @@ void setup()
   Serial.print("Topic:        ");
   Serial.println(mqtt_topic);
 
-  // configure  mqtt client
-  client.setServer(mqtt_address, mqtt_port);
-
   Serial.println();
   Serial.println("Setup completed");
+
+  enableOTA();
 }
 
 void reconnect()
@@ -87,7 +93,16 @@ void reconnect()
   // Loop until we're reconnected
   while (!client.connected())
   {
-    Serial.print("Attempting MQTT connection...");
+    // resolve mqtt address
+    WiFi.hostByName(mqtt_server, mqtt_address);
+    client.setServer(mqtt_address, mqtt_port);
+
+    Serial.print("Attempting MQTT connection... ");
+    Serial.print(mqtt_server);
+    Serial.print(" (");
+    Serial.print(mqtt_address);
+    Serial.println(")");
+
     // Create a random client ID
     // TODO maybe we should use our hostname
     String clientId = "ESP8266Client-";
@@ -111,6 +126,13 @@ void reconnect()
 
 void loop()
 {
+  ArduinoOTA.handle();
+  
+  if (!client.connected())
+  {
+    reconnect();
+  }
+
   // read the state of the switch into a local variable:
   int reading = digitalRead(gpio);
 
@@ -145,11 +167,6 @@ void loop()
         Serial.print(" ");
         Serial.println(counter);
 
-        if (!client.connected())
-        {
-          reconnect();
-        }
-
         snprintf(mqtt_message_payload, 32, "%d", counter);
         client.publish(mqtt_topic, mqtt_message_payload);
 
@@ -166,4 +183,68 @@ void loop()
 
   // save the reading. Next time through the loop, it'll be the lastButtonState:
   lastState = reading;
+}
+
+void enableOTA()
+{
+  // Port defaults to 8266
+  // ArduinoOTA.setPort(8266);
+
+  // Hostname defaults to esp8266-[ChipID]
+  // ArduinoOTA.setHostname("myesp8266");
+
+  // No authentication by default
+  // ArduinoOTA.setPassword("admin");
+
+  // Password can be set with it's md5 value as well
+  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
+
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH)
+    {
+      type = "sketch";
+    }
+    else
+    { // U_FS
+      type = "filesystem";
+    }
+
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    Serial.println("Start updating " + type);
+  });
+
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR)
+    {
+      Serial.println("Auth Failed");
+    }
+    else if (error == OTA_BEGIN_ERROR)
+    {
+      Serial.println("Begin Failed");
+    }
+    else if (error == OTA_CONNECT_ERROR)
+    {
+      Serial.println("Connect Failed");
+    }
+    else if (error == OTA_RECEIVE_ERROR)
+    {
+      Serial.println("Receive Failed");
+    }
+    else if (error == OTA_END_ERROR)
+    {
+      Serial.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
 }
